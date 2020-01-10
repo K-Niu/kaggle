@@ -58,8 +58,10 @@ for feature in sequence_numerical_features:
 
 
 def dense_to_sparse(dense_tensor):
-    zero = tf.constant(0, dtype=tf.float64)
-    indices = tf.where(tf.not_equal(dense_tensor, zero))
+    # Indices for 0 values must be included as well because
+    # SequenceFeatures disregards 0s when calculating sequence length
+    # https://github.com/tensorflow/tensorflow/issues/27442
+    indices = tf.where(tf.ones_like(dense_tensor))
     values = tf.gather_nd(dense_tensor, indices)
 
     return tf.SparseTensor(indices, values, tf.cast(tf.shape(dense_tensor), dtype=tf.int64))
@@ -85,9 +87,21 @@ for example in train.take(1):
 sequence_inputs = {}
 sequence_feature_columns = []
 
+for feature in ["types"]:
+    sequence_inputs[feature] = example[0][feature]
+    sequence_feature_columns.append(
+        tf.feature_column.indicator_column(
+            tf.feature_column.sequence_categorical_column_with_vocabulary_list(
+                feature,
+                sequence_categorical_features[feature]
+            )
+        )
+    )
 for feature in ["2000_counts", "2010_counts"]:
     sequence_inputs[feature] = tf.keras.layers.Lambda(lambda x: dense_to_sparse(x), dtype=tf.float64)(example[0][feature])
     sequence_feature_columns.append(tf.feature_column.sequence_numeric_column(feature))
 
 sequence_features = tf.keras.experimental.SequenceFeatures(sequence_feature_columns, dtype=tf.float64)
 processed_sequence_features, sequence_length = sequence_features(sequence_inputs)
+
+print("hi")
