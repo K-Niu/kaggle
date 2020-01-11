@@ -18,14 +18,15 @@ with open("worlds.json", "r") as f:
 with open("measurement_event_codes.json", "r") as f:
     MEASUREMENT_EVENT_CODES = json.loads(f.read())
 
-max_length = 25
-sequence_categorical_features = {
+MAX_LENGTH = 25
+MASK_VALUE = -1.0
+SEQUENCE_CATEGORICAL_FEATURES = {
     "types": EVENT_TYPES,
     "titles": TITLES,
     "worlds": WORLDS,
     "days_of_week": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 }
-sequence_numerical_features = ["hours", "times_since_first_game_session",
+SEQUENCE_NUMERIC_FEATURES = ["hours", "times_since_first_game_session",
                       "2000_counts", "3010_counts", "3110_counts", "4070_counts",
                       "4090_counts", "4030_counts", "4035_counts", "4021_counts",
                       "4020_counts", "4010_counts", "2080_counts", "2083_counts",
@@ -43,31 +44,31 @@ sequence_numerical_features = ["hours", "times_since_first_game_session",
 # Normalize sequence features
 
 # Pad sequences
-for feature in sequence_categorical_features:
+for feature in SEQUENCE_CATEGORICAL_FEATURES:
     features[feature] = list(tf.keras.preprocessing.sequence.pad_sequences(
         features[feature],
         padding="post",
         truncating="post",
         dtype=object,
-        maxlen=max_length,
+        maxlen=MAX_LENGTH,
         value=""
     ))
-for feature in sequence_numerical_features:
+for feature in SEQUENCE_NUMERIC_FEATURES:
     features[feature] = list(tf.keras.preprocessing.sequence.pad_sequences(
         features[feature],
         padding="post",
         truncating="post",
         dtype="float64",
-        maxlen=max_length,
-        value=-1.0
+        maxlen=MAX_LENGTH,
+        value=MASK_VALUE
     ))
 
 
 def dense_to_sparse(dense_tensor):
-    # Indices for 0 values must be included as well because
-    # SequenceFeatures disregards 0s when calculating sequence length
+    # We include the indices of 0 values because
+    # otherwise SequenceFeatures doesn't count them in the sequence length
     # https://github.com/tensorflow/tensorflow/issues/27442
-    indices = tf.where(tf.ones_like(dense_tensor))
+    indices = tf.where(tf.not_equal(dense_tensor, tf.constant(MASK_VALUE, dtype=tf.float64)))
     values = tf.gather_nd(dense_tensor, indices)
 
     return tf.SparseTensor(indices, values, tf.cast(tf.shape(dense_tensor), dtype=tf.int64))
@@ -79,19 +80,21 @@ def model_fn():
 
     sequence_inputs = {}
     sequence_feature_columns = []
-    for feature in sequence_categorical_features.keys():
-        inputs[feature] = sequence_inputs[feature] = tf.keras.Input(shape=(max_length), name=feature, dtype=tf.string)
+    for feature in SEQUENCE_CATEGORICAL_FEATURES.keys():
+        inputs[feature] = sequence_inputs[feature] = tf.keras.Input(shape=(MAX_LENGTH), name=feature, dtype=tf.string)
         sequence_feature_columns.append(
             tf.feature_column.indicator_column(
                 tf.feature_column.sequence_categorical_column_with_vocabulary_list(
                     feature,
-                    sequence_categorical_features[feature]
+                    SEQUENCE_CATEGORICAL_FEATURES[feature]
                 )
             )
         )
 
-    for feature in sequence_numerical_features:
-        inputs[feature] = tf.keras.Input(shape=(max_length), name=feature, dtype=tf.float64)
+    for feature in SEQUENCE_NUMERIC_FEATURES:
+        inputs[feature] = tf.keras.Input(shape=(MAX_LENGTH), name=feature, dtype=tf.float64)
+        # Numeric inputs to SequenceFeatures must be sparse tensors
+        # https://github.com/tensorflow/tensorflow/issues/29879
         sequence_inputs[feature] = tf.keras.layers.Lambda(lambda x: dense_to_sparse(x), dtype=tf.float64)(inputs[feature])
         sequence_feature_columns.append(tf.feature_column.sequence_numeric_column(feature))
 
@@ -109,8 +112,8 @@ def model_fn():
 
     # Model
     processed_sequence_features, sequence_length = sequence_features(sequence_inputs)
-    masked_sequence_features = tf.keras.layers.Masking(mask_value=-1)(processed_sequence_features)
-    sequence_lstm = tf.keras.layers.LSTM(50, dtype=tf.float64)(processed_sequence_features)
+    sequence_length_mask = tf.sequence_mask(sequence_length)
+    sequence_lstm = tf.keras.layers.LSTM(50, dtype=tf.float64)(processed_sequence_features, mask=sequence_length_mask)
 
     processed_assessments = assessment_feature({"assessment": inputs["assessment"]})
 
@@ -127,24 +130,11 @@ def model_fn():
     return model
 
 
-def preprocess_fn(features, label):
-    # Numeric inputs to SequenceFeatures must be sparse tensors
-    # https://github.com/tensorflow/tensorflow/issues/29879
-    processed_features = features.copy()
-    zero = tf.constant(0, dtype=tf.float64)
-    for feature in sequence_numerical_features:
-        indices = tf.where(tf.not_equal(features[feature], zero))
-        values = tf.gather_nd(features[feature], indices)
-        processed_features[feature] = tf.SparseTensor(indices, values, features[feature].shape)
-    return processed_features, label
-
-
 def df_to_dataset(dataframe, batch_size=32, shuffle=True):
     dataframe = dataframe.copy()
     labels = dataframe.pop('accuracy_group')
     labels = tf.keras.utils.to_categorical(labels, num_classes=4, dtype="float64")
     dataset = tf.data.Dataset.from_tensor_slices((dict(dataframe), labels))
-    # dataset = dataset.map(preprocess_fn)
     if shuffle:
         dataset = dataset.shuffle(buffer_size=len(dataframe))
     dataset = dataset.batch(batch_size)

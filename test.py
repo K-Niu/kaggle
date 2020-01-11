@@ -58,8 +58,8 @@ for feature in sequence_numerical_features:
 
 
 def dense_to_sparse(dense_tensor):
-    # Indices for 0 values must be included as well because
-    # SequenceFeatures disregards 0s when calculating sequence length
+    # We include the indices of 0 values because
+    # otherwise SequenceFeatures doesn't count them in the sequence length
     # https://github.com/tensorflow/tensorflow/issues/27442
     indices = tf.where(tf.ones_like(dense_tensor))
     values = tf.gather_nd(dense_tensor, indices)
