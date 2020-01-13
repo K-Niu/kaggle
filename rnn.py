@@ -6,7 +6,6 @@ from sklearn.metrics import cohen_kappa_score, confusion_matrix
 from utils import QuadCohenKappaLoss, subsample_assessments
 
 
-features = pd.read_pickle("train_features.pkl")
 with open("event_types.json", "r") as f:
     EVENT_TYPES = json.loads(f.read())
 with open("event_codes.json", "r") as f:
@@ -24,24 +23,38 @@ SEQUENCE_CATEGORICAL_FEATURES = {
     "types": EVENT_TYPES,
     "titles": TITLES,
     "worlds": WORLDS,
-    "days_of_week": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    # "days_of_week": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 }
-SEQUENCE_NUMERIC_FEATURES = ["hours", "times_since_first_game_session",
-                      "2000_counts", "3010_counts", "3110_counts", "4070_counts",
-                      "4090_counts", "4030_counts", "4035_counts", "4021_counts",
-                      "4020_counts", "4010_counts", "2080_counts", "2083_counts",
-                      "2040_counts", "2020_counts", "2030_counts", "3021_counts",
-                      "3121_counts", "2050_counts", "3020_counts", "3120_counts",
-                      "2060_counts", "2070_counts", "4031_counts", "4025_counts",
-                      "5000_counts", "5010_counts", "2081_counts", "2025_counts",
-                      "4022_counts", "2035_counts", "4040_counts", "4100_counts",
-                      "2010_counts", "4110_counts", "4045_counts", "4095_counts",
-                      "4220_counts", "2075_counts", "4230_counts", "4235_counts",
-                      "4080_counts", "4050_counts", "4020_succeses", "4100_succeses",
+# SEQUENCE_NUMERIC_FEATURES = ["hours", "times_since_first_game_session",
+#                       "2000_counts", "3010_counts", "3110_counts", "4070_counts",
+#                       "4090_counts", "4030_counts", "4035_counts", "4021_counts",
+#                       "4020_counts", "4010_counts", "2080_counts", "2083_counts",
+#                       "2040_counts", "2020_counts", "2030_counts", "3021_counts",
+#                       "3121_counts", "2050_counts", "3020_counts", "3120_counts",
+#                       "2060_counts", "2070_counts", "4031_counts", "4025_counts",
+#                       "5000_counts", "5010_counts", "2081_counts", "2025_counts",
+#                       "4022_counts", "2035_counts", "4040_counts", "4100_counts",
+#                       "2010_counts", "4110_counts", "4045_counts", "4095_counts",
+#                       "4220_counts", "2075_counts", "4230_counts", "4235_counts",
+#                       "4080_counts", "4050_counts", "4020_succeses", "4100_succeses",
+#                       "4025_succeses", "4110_succeses", "4020_attempts", "4100_attempts",
+#                       "4025_attempts", "4110_attempts"]
+SEQUENCE_NUMERIC_FEATURES = ["hours", "times_since_first_game_session", "4020_succeses", "4100_succeses",
                       "4025_succeses", "4110_succeses", "4020_attempts", "4100_attempts",
                       "4025_attempts", "4110_attempts"]
 
+FEATURE_BLACKLIST = [
+    "2000_counts" # Always 1 per game session
+]
+
+features = pd.read_pickle("train_features.pkl")
+features = features[
+    list(SEQUENCE_CATEGORICAL_FEATURES.keys()) + ["installation_id", "assessment", "accuracy_group"]
+]
+
 # Normalize sequence features
+# train_truncated = subsample_assessments(features)
+
 
 # Pad sequences
 for feature in SEQUENCE_CATEGORICAL_FEATURES:
@@ -53,15 +66,15 @@ for feature in SEQUENCE_CATEGORICAL_FEATURES:
         maxlen=MAX_LENGTH,
         value=""
     ))
-for feature in SEQUENCE_NUMERIC_FEATURES:
-    features[feature] = list(tf.keras.preprocessing.sequence.pad_sequences(
-        features[feature],
-        padding="post",
-        truncating="post",
-        dtype="float64",
-        maxlen=MAX_LENGTH,
-        value=MASK_VALUE
-    ))
+# for feature in SEQUENCE_NUMERIC_FEATURES:
+#     features[feature] = list(tf.keras.preprocessing.sequence.pad_sequences(
+#         features[feature],
+#         padding="post",
+#         truncating="post",
+#         dtype="float64",
+#         maxlen=MAX_LENGTH,
+#         value=MASK_VALUE
+#     ))
 
 
 def dense_to_sparse(dense_tensor):
@@ -80,23 +93,30 @@ def model_fn():
 
     sequence_inputs = {}
     sequence_feature_columns = []
+    categorical_embedding_dimensions = {
+        "types": 4,
+        "titles": 8,
+        "worlds": 4,
+        # "days_of_week": 4
+    }
     for feature in SEQUENCE_CATEGORICAL_FEATURES.keys():
         inputs[feature] = sequence_inputs[feature] = tf.keras.Input(shape=(MAX_LENGTH), name=feature, dtype=tf.string)
         sequence_feature_columns.append(
-            tf.feature_column.indicator_column(
+            tf.feature_column.embedding_column(
                 tf.feature_column.sequence_categorical_column_with_vocabulary_list(
                     feature,
                     SEQUENCE_CATEGORICAL_FEATURES[feature]
-                )
+                ),
+                dimension=categorical_embedding_dimensions[feature]
             )
         )
 
-    for feature in SEQUENCE_NUMERIC_FEATURES:
-        inputs[feature] = tf.keras.Input(shape=(MAX_LENGTH), name=feature, dtype=tf.float64)
-        # Numeric inputs to SequenceFeatures must be sparse tensors
-        # https://github.com/tensorflow/tensorflow/issues/29879
-        sequence_inputs[feature] = tf.keras.layers.Lambda(lambda x: dense_to_sparse(x), dtype=tf.float64)(inputs[feature])
-        sequence_feature_columns.append(tf.feature_column.sequence_numeric_column(feature))
+    # for feature in SEQUENCE_NUMERIC_FEATURES:
+    #     inputs[feature] = tf.keras.Input(shape=(MAX_LENGTH), name=feature, dtype=tf.float64)
+    #     # Numeric inputs to SequenceFeatures must be sparse tensors
+    #     # https://github.com/tensorflow/tensorflow/issues/29879
+    #     sequence_inputs[feature] = tf.keras.layers.Lambda(lambda x: dense_to_sparse(x), dtype=tf.float64)(inputs[feature])
+    #     sequence_feature_columns.append(tf.feature_column.sequence_numeric_column(feature))
 
     sequence_features = tf.keras.experimental.SequenceFeatures(sequence_feature_columns)
 
@@ -113,12 +133,13 @@ def model_fn():
     # Model
     processed_sequence_features, sequence_length = sequence_features(sequence_inputs)
     sequence_length_mask = tf.sequence_mask(sequence_length)
-    sequence_lstm = tf.keras.layers.LSTM(50, dtype=tf.float64)(processed_sequence_features, mask=sequence_length_mask)
+    sequence_lstm = tf.keras.layers.LSTM(100, dtype=tf.float64)(processed_sequence_features, mask=sequence_length_mask)
 
     processed_assessments = assessment_feature({"assessment": inputs["assessment"]})
 
-    x = tf.keras.layers.concatenate([sequence_lstm, processed_assessments], axis=1, dtype=tf.float64)
-    output = tf.keras.layers.Dense(4, activation="softmax", dtype=tf.float64)(x)
+    features_concat = tf.keras.layers.concatenate([sequence_lstm, processed_assessments], axis=1, dtype=tf.float64)
+    # dense = tf.keras.layers.Dense(16, activation="relu", dtype=tf.float64)(features_concat)
+    output = tf.keras.layers.Dense(4, activation="softmax", dtype=tf.float64)(features_concat)
 
     model = tf.keras.Model(inputs=inputs, outputs=output)
 
@@ -153,6 +174,13 @@ for train_index, val_index in group_kfold.split(features, groups=features["insta
     y_val = val["accuracy_group"]
 
     model = model_fn()
+    tensor_board_cb = tf.keras.callbacks.TensorBoard(
+        log_dir="/Users/Kelvin/PycharmProjects/kaggle/tensorboard",
+        # histogram_freq=10,
+        update_freq="epoch",
+        # embeddings_freq=10
+
+    )
     early_stopping_cb = tf.keras.callbacks.EarlyStopping(
         monitor="val_loss",
         patience=5,
@@ -162,7 +190,7 @@ for train_index, val_index in group_kfold.split(features, groups=features["insta
         train_dataset,
         epochs=200,
         validation_data=val_dataset,
-        callbacks=[early_stopping_cb]
+        callbacks=[tensor_board_cb, early_stopping_cb]
     )
     histories.append(history)
 
