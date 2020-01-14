@@ -1,5 +1,6 @@
 import json
 import pandas as pd
+import numpy as np
 import tensorflow as tf
 
 
@@ -14,7 +15,7 @@ with open("worlds.json", "r") as f:
 with open("measurement_event_codes.json", "r") as f:
     MEASUREMENT_EVENT_CODES = json.loads(f.read())
 
-MAX_LENGTH = 50
+MAX_LENGTH = 100
 MASK_VALUE = -1.0
 SEQUENCE_CATEGORICAL_FEATURES = {
     "types": EVENT_TYPES,
@@ -44,7 +45,33 @@ features = pd.read_pickle("train_features.pkl")
 features = features[
     list(SEQUENCE_CATEGORICAL_FEATURES.keys()) + SEQUENCE_NUMERIC_FEATURES + ["installation_id", "assessment", "accuracy_group"]
 ]
+features["sample_weight"] = 1 / features.groupby("installation_id")["accuracy_group"].transform("count")
 
+# Estimate accuracy_group proportions in the test set by using sample weights in train instead of sampling
+accuracy_groups = features.groupby("accuracy_group")["sample_weight"].agg("sum")
+accuracy_group_proportions = accuracy_groups / accuracy_groups.sum()
+
+
+def scores_to_pred(scores):
+    accumulated_percentile = 0
+    bounds = []
+    for i in range(3):
+        accumulated_percentile += accuracy_group_proportions[i]
+        bounds.append(np.percentile(scores, accumulated_percentile * 100))
+
+    print(f"Cutoff bounds: {bounds}")
+
+    def classify(score):
+        if score <= bounds[0]:
+            return 0
+        elif score <= bounds[1]:
+            return 1
+        elif score <= bounds[2]:
+            return 2
+        else:
+            return 3
+
+    return np.array(list(map(classify, scores)))
 # Normalize sequence features
 
 # Pad sequences
@@ -52,7 +79,7 @@ for feature in SEQUENCE_CATEGORICAL_FEATURES:
     features[feature] = list(tf.keras.preprocessing.sequence.pad_sequences(
         features[feature],
         padding="post",
-        truncating="pre",
+        truncating="post",
         dtype=object,
         maxlen=MAX_LENGTH,
         value=""
@@ -61,18 +88,19 @@ for feature in SEQUENCE_NUMERIC_FEATURES:
     features[feature] = list(tf.keras.preprocessing.sequence.pad_sequences(
         features[feature],
         padding="post",
-        truncating="pre",
-        dtype="float64",
+        truncating="post",
+        dtype="float32",
         maxlen=MAX_LENGTH,
         value=MASK_VALUE
     ))
+
 
 
 def dense_to_sparse(dense_tensor):
     # We include the indices of 0 values because
     # otherwise SequenceFeatures doesn't count them in the sequence length
     # https://github.com/tensorflow/tensorflow/issues/27442
-    indices = tf.where(tf.not_equal(dense_tensor, tf.constant(MASK_VALUE, dtype=tf.float64)))
+    indices = tf.where(tf.not_equal(dense_tensor, tf.constant(MASK_VALUE, dtype=tf.float32)))
     values = tf.gather_nd(dense_tensor, indices)
 
     return tf.SparseTensor(indices, values, tf.cast(tf.shape(dense_tensor), dtype=tf.int64))
@@ -80,9 +108,9 @@ def dense_to_sparse(dense_tensor):
 
 def df_to_dataset(dataframe, batch_size=32, shuffle=True):
     dataframe = dataframe.copy()
-    labels = dataframe.pop('accuracy_group')
-    labels = tf.keras.utils.to_categorical(labels, num_classes=4, dtype="float64")
-    dataset = tf.data.Dataset.from_tensor_slices((dict(dataframe), labels))
+    labels = dataframe.pop("accuracy_group")
+    sample_weights = dataframe.pop("sample_weight")
+    dataset = tf.data.Dataset.from_tensor_slices((dict(dataframe), labels, sample_weights))
     if shuffle:
         dataset = dataset.shuffle(buffer_size=len(dataframe))
     dataset = dataset.batch(batch_size)
@@ -96,22 +124,30 @@ for example in train.take(1):
 
 sequence_inputs = {}
 sequence_feature_columns = []
-
+categorical_embedding_dimensions = {
+    "types": 4,
+    "titles": 8,
+    "worlds": 4,
+    "days_of_week": 4
+}
 for feature in ["types"]:
     sequence_inputs[feature] = example[0][feature]
     sequence_feature_columns.append(
-        tf.feature_column.indicator_column(
+        tf.feature_column.embedding_column(
             tf.feature_column.sequence_categorical_column_with_vocabulary_list(
                 feature,
                 SEQUENCE_CATEGORICAL_FEATURES[feature]
-            )
+            ),
+            dimension=categorical_embedding_dimensions[feature]
         )
     )
 for feature in ["hours", "4020_succeses"]:
-    sequence_inputs[feature] = tf.keras.layers.Lambda(lambda x: dense_to_sparse(x), dtype=tf.float64)(example[0][feature])
+    sequence_inputs[feature] = tf.keras.layers.Lambda(lambda x: dense_to_sparse(x))(example[0][feature])
     sequence_feature_columns.append(tf.feature_column.sequence_numeric_column(feature))
 
-sequence_features = tf.keras.experimental.SequenceFeatures(sequence_feature_columns, dtype=tf.float64)
+sequence_features = tf.keras.experimental.SequenceFeatures(sequence_feature_columns)
 processed_sequence_features, sequence_length = sequence_features(sequence_inputs)
+sequence_length_mask = tf.sequence_mask(sequence_length, maxlen=MAX_LENGTH)
+sequence_lstm = tf.keras.layers.LSTM(100)(processed_sequence_features, mask=sequence_length_mask)
 
 print("hi")
