@@ -1,22 +1,17 @@
-import json
 import pandas as pd
 import numpy as np
 import tensorflow as tf
 from sklearn.model_selection import GroupKFold
 from sklearn.metrics import cohen_kappa_score, confusion_matrix
-from utils import QuadCohenKappaLoss, subsample_assessments
+from utils.tf import df_to_dataset
+from dsb_2019.preprocessing.constants import (
+    EVENT_TYPES,
+    EVENT_CODES,
+    TITLES,
+    WORLDS,
+    MEASUREMENT_EVENT_CODES
+)
 
-
-with open("event_types.json", "r") as f:
-    EVENT_TYPES = json.loads(f.read())
-with open("event_codes.json", "r") as f:
-    EVENT_CODES = json.loads(f.read())
-with open("titles.json", "r") as f:
-    TITLES = json.loads(f.read())
-with open("worlds.json", "r") as f:
-    WORLDS = json.loads(f.read())
-with open("measurement_event_codes.json", "r") as f:
-    MEASUREMENT_EVENT_CODES = json.loads(f.read())
 
 MAX_LENGTH = 100
 MASK_VALUE = -1.0
@@ -44,11 +39,7 @@ SEQUENCE_NUMERIC_FEATURES = ["hours", "times_since_first_game_session", "4020_su
                       "4025_succeses", "4110_succeses", "4020_attempts", "4100_attempts",
                       "4025_attempts", "4110_attempts"]
 
-FEATURE_BLACKLIST = [
-    "2000_counts" # Always 1 per game session
-]
-
-features = pd.read_pickle("train_features.pkl")
+features = pd.read_pickle("../train_features.pkl")
 features = features[
     list(SEQUENCE_CATEGORICAL_FEATURES.keys()) + SEQUENCE_NUMERIC_FEATURES + ["installation_id", "assessment", "accuracy_group"]
 ]
@@ -180,16 +171,6 @@ def model_fn():
     return model
 
 
-def df_to_dataset(dataframe, batch_size=32, shuffle=True):
-    dataframe = dataframe.copy()
-    labels = dataframe.pop("accuracy_group")
-    sample_weights = dataframe.pop("sample_weight")
-    dataset = tf.data.Dataset.from_tensor_slices((dict(dataframe), labels, sample_weights))
-    if shuffle:
-        dataset = dataset.shuffle(buffer_size=len(dataframe))
-    dataset = dataset.batch(batch_size)
-    return dataset
-
 
 group_kfold = GroupKFold(n_splits=5)
 
@@ -198,8 +179,8 @@ histories = []
 qwk_scores = []
 for train_index, val_index in group_kfold.split(features, groups=features["installation_id"]):
     train, val = features.iloc[train_index], features.iloc[val_index]
-    train_dataset = df_to_dataset(train.drop(["installation_id"], axis=1), batch_size=32, shuffle=True)
-    val_dataset = df_to_dataset(val.drop(["installation_id"], axis=1), batch_size=len(val), shuffle=False)
+    train_dataset = df_to_dataset(train.drop(["installation_id"], axis=1), batch_size=32, target_column="accuracy_group", sample_weight_column="sample_weight", shuffle=True)
+    val_dataset = df_to_dataset(val.drop(["installation_id"], axis=1), batch_size=len(val), target_column="accuracy_group", sample_weight_column="sample_weight", shuffle=False)
     y_val = val["accuracy_group"]
     val_sample_weights = val["sample_weight"]
 

@@ -51,6 +51,17 @@ class QuadCohenKappaLoss(tf.keras.losses.Loss):
         return dict(list(base_config.items()) + list(config.items()))
 
 
+def df_to_dataset(dataframe, batch_size, target_column, sample_weight_column=None, shuffle=True):
+    dataframe = dataframe.copy()
+    labels = dataframe.pop(target_column)
+    sample_weights = dataframe.pop(sample_weight_column)
+    dataset = tf.data.Dataset.from_tensor_slices((dict(dataframe), labels, sample_weights))
+    if shuffle:
+        dataset = dataset.shuffle(buffer_size=len(dataframe))
+    dataset = dataset.batch(batch_size)
+    return dataset
+
+
 def subsample_assessments(dataframe):
     chosen = []
     for i, assessments in dataframe.groupby("installation_id", sort=False):
