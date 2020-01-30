@@ -72,7 +72,13 @@ def scores_to_pred(scores):
     return np.array(list(map(classify, scores)))
 
 # Normalize sequence features
-# train_truncated = subsample_assessments(features)
+for feature in SEQUENCE_NUMERIC_FEATURES:
+    all_values = []
+    for value in features[feature]:
+        all_values.extend(value)
+    value_mean = np.mean(all_values)
+    value_std = np.std(all_values)
+    features[feature] = features[feature].apply(lambda x: (x - value_mean) / value_std)
 
 
 # Pad sequences
