@@ -211,15 +211,15 @@ if __name__ == "__main__":
     accuracy_group_proportions = list(accuracy_groups / accuracy_groups.sum())
 
     # Normalize sequence features
-    # for feature in SEQUENCE_NUMERIC_FEATURES:
-    #     all_values = []
-    #     for value in train_features[feature]:
-    #         all_values.extend(value)
-    #     value_mean = np.mean(all_values)
-    #     value_std = np.std(all_values)
-    #     train_features[feature] = train_features[feature].apply(
-    #         lambda x: (x - value_mean) / value_std
-    #     )
+    for feature in SEQUENCE_NUMERIC_FEATURES:
+        all_values = []
+        for value in train_features[feature]:
+            all_values.extend(value)
+        value_mean = np.mean(all_values)
+        value_std = np.std(all_values)
+        train_features[feature] = train_features[feature].apply(
+            lambda x: (x - value_mean) / value_std
+        )
 
     # Pad sequences
     for feature in SEQUENCE_CATEGORICAL_FEATURES:
@@ -254,7 +254,6 @@ if __name__ == "__main__":
         model, qwk_score = train_and_evaluate(
             train_features, train_index, val_index, accuracy_group_proportions
         )
-        break
 
     print(f"QWK score: {np.mean(qwk_scores)}")
 
