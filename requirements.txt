@@ -1,0 +1,8 @@
+invoke==1.4.1
+magicinvoke==2.4.5
+black==19.10b0
+pytest==5.3.5
+numpy==1.18.1
+pandas==0.25.3
+tensorflow==2.1.0
+lightgbm==2.3.1
